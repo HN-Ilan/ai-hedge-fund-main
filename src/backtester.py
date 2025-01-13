@@ -1,0 +1,335 @@
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
+import questionary
+
+import matplotlib.pyplot as plt
+import pandas as pd
+from tabulate import tabulate
+from colorama import Fore, Back, Style, init
+
+from .utils.analysts import ANALYST_ORDER
+from .main import run_hedge_fund
+from .tools.api import (
+    get_price_data,
+    get_prices,
+    get_financial_metrics,
+    get_insider_trades,
+    search_line_items,
+)
+from .utils.display import (
+    print_backtest_results, 
+    format_backtest_output,
+    format_backtest_row
+)
+init(autoreset=True)
+
+
+class Backtester:
+    def __init__(self, agent, ticker, start_date, end_date, initial_capital, selected_analysts=None,progress=None, logger=None):
+        self.agent = agent
+        self.ticker = ticker
+        self.start_date = start_date
+        self.end_date = end_date
+        self.initial_capital = initial_capital
+        self.selected_analysts = selected_analysts
+        self.portfolio = {"cash": initial_capital, "stock": 0}
+        self.portfolio_values = []
+        self.total_return = 0
+        self.sharpe_ratio = 0
+        self.max_drawdown = 0
+        self.progress = progress  # Store progress directly
+        self.logger = logger
+
+    def prefetch_data(self):
+        """Pre-fetch all data needed for the backtest period."""
+        print("\nPre-fetching data for the entire backtest period...")
+        
+        # Convert end_date string to datetime, perform arithmetic, then back to string
+        end_date_dt = datetime.strptime(self.end_date, "%Y-%m-%d")
+        start_date_dt = end_date_dt - relativedelta(years=1)
+        start_date_str = start_date_dt.strftime("%Y-%m-%d")
+        
+        # Fetch price data for the entire period, plus 1 year 
+        get_prices(self.ticker, start_date_str, self.end_date)
+        
+        # Fetch financial metrics
+        get_financial_metrics(self.ticker, self.end_date, limit=10)
+        
+        # Fetch insider trades
+        get_insider_trades(self.ticker, self.end_date, limit=1000)
+        
+        # Fetch common line items used by valuation agent
+        search_line_items(
+            self.ticker,
+            [
+                "free_cash_flow",
+                "net_income",
+                "depreciation_and_amortization",
+                "capital_expenditure",
+                "working_capital",
+            ],
+            self.end_date,
+            period="ttm",
+            limit=2,  # Need current and previous for working capital change
+        )
+        
+        print("Data pre-fetch complete.")
+
+    def parse_agent_response(self, agent_output):
+        try:
+            # Expect JSON output from agent
+            import json
+
+            decision = json.loads(agent_output)
+            return decision
+        except:
+            print(f"Error parsing action: {agent_output}")
+            return "hold", 0
+
+    def execute_trade(self, action, quantity, current_price):
+        """Validate and execute trades based on portfolio constraints"""
+        if action == "buy" and quantity > 0:
+            cost = quantity * current_price
+            if cost <= self.portfolio["cash"]:
+                self.portfolio["stock"] += quantity
+                self.portfolio["cash"] -= cost
+                return quantity
+            else:
+                # Calculate maximum affordable quantity
+                max_quantity = self.portfolio["cash"] // current_price
+                if max_quantity > 0:
+                    self.portfolio["stock"] += max_quantity
+                    self.portfolio["cash"] -= max_quantity * current_price
+                    return max_quantity
+                return 0
+        elif action == "sell" and quantity > 0:
+            quantity = min(quantity, self.portfolio["stock"])
+            if quantity > 0:
+                self.portfolio["cash"] += quantity * current_price
+                self.portfolio["stock"] -= quantity
+                return quantity
+            return 0
+        return 0
+
+    def run_backtest(self):
+        self.prefetch_data()
+        
+        dates = pd.date_range(self.start_date, self.end_date, freq="B")
+        total_dates = len(dates)
+        self.table_rows = []  # Initialize as class variable
+
+        print("\nStarting backtest...")
+        if self.logger:
+            self.logger.log(
+                f"Running for {total_dates} days from {self.start_date} to {self.end_date}",
+            )
+        for i, current_date in enumerate(dates):
+            try:
+                lookback_start = (current_date - timedelta(days=30)).strftime("%Y-%m-%d")
+                current_date_str = current_date.strftime("%Y-%m-%d")
+                # Update progress
+                if self.progress is not None:
+                    self.progress(i / total_dates, f"Processing {current_date_str}")
+                    print(total_dates)
+
+
+                output = self.agent(
+                    ticker=self.ticker,
+                    start_date=lookback_start,
+                    end_date=current_date_str,
+                    portfolio=self.portfolio,
+                    selected_analysts=self.selected_analysts,
+                )
+
+                # Get price data and check if it's valid
+                df = get_price_data(self.ticker, lookback_start, current_date_str)
+                if df.empty:
+                    if self.logger:
+                        self.logger.log(f"No price data available for {current_date_str}", "warning")
+                    continue
+
+                agent_decision = output["decision"]
+                action, quantity = agent_decision["action"], agent_decision["quantity"]
+                current_price = df.iloc[-1]["close"]
+
+                # Execute the trade with validation
+                executed_quantity = self.execute_trade(action, quantity, current_price)
+
+                # Update total portfolio value
+                total_value = self.portfolio["cash"] + self.portfolio["stock"] * current_price
+                self.portfolio["portfolio_value"] = total_value
+
+                # Count signals from selected analysts only
+                analyst_signals = output["analyst_signals"]
+
+                # Count signals
+                bullish_count = len([s for s in analyst_signals.values() if s.get("signal", "").lower() == "bullish"])
+                bearish_count = len([s for s in analyst_signals.values() if s.get("signal", "").lower() == "bearish"])
+                neutral_count = len([s for s in analyst_signals.values() if s.get("signal", "").lower() == "neutral"])
+
+                if self.logger:
+                    self.logger.log(
+                        f"Day-{i}, Recommendation: {action} {quantity} Signal counts - Bullish: {bullish_count}, Bearish: {bearish_count}, Neutral: {neutral_count} ",
+                        "info"
+                    )
+
+                # Format and add row
+                self.table_rows.append(format_backtest_row(
+                    date=current_date.strftime('%Y-%m-%d'),
+                    ticker=self.ticker,
+                    action=action,
+                    quantity=executed_quantity,
+                    price=current_price,
+                    cash=self.portfolio['cash'],
+                    stock=self.portfolio['stock'],
+                    total_value=total_value,
+                    bullish_count=bullish_count,
+                    bearish_count=bearish_count,
+                    neutral_count=neutral_count
+                ))
+
+                # Update logs and display periodically
+                if self.logger and i % 5 == 0:  # Update every 5 days
+                    self.logger.log(format_backtest_output(self.table_rows), "info")
+                
+                # Display the updated table in CLI
+                print_backtest_results(self.table_rows)
+
+                # Record the portfolio value
+                self.portfolio_values.append(
+                    {"Date": current_date, "Portfolio Value": total_value}
+                )
+
+            except Exception as e:
+                if self.logger:
+                    self.logger.log(f"Error processing date {current_date_str}: {str(e)}", "error")
+                else:
+                    print(f"Error processing date {current_date_str}: {str(e)}")
+                continue
+
+        if self.logger:
+            self.logger.log("Backtest completed", "success")
+    def get_table_rows(self):
+        """Get the current table rows."""
+        return self.table_rows
+    # def analyze_performance(self):
+    #     # Convert portfolio values to DataFrame
+    #     performance_df = pd.DataFrame(self.portfolio_values).set_index("Date")
+
+    #     # Calculate total return
+    #     total_return = (
+    #         self.portfolio["portfolio_value"] - self.initial_capital
+    #     ) / self.initial_capital
+    #     print(f"Total Return: {total_return * 100:.2f}%")
+
+    #     # Plot the portfolio value over time
+    #     performance_df["Portfolio Value"].plot(
+    #         title="Portfolio Value Over Time", figsize=(12, 6)
+    #     )
+    #     plt.ylabel("Portfolio Value ($)")
+    #     plt.xlabel("Date")
+    #     plt.show()
+
+    #     # Compute daily returns
+    #     performance_df["Daily Return"] = performance_df["Portfolio Value"].pct_change()
+
+    #     # Calculate Sharpe Ratio (assuming 252 trading days in a year)
+    #     mean_daily_return = performance_df["Daily Return"].mean()
+    #     std_daily_return = performance_df["Daily Return"].std()
+    #     sharpe_ratio = (mean_daily_return / std_daily_return) * (252**0.5)
+    #     print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
+
+    #     # Calculate Maximum Drawdown
+    #     rolling_max = performance_df["Portfolio Value"].cummax()
+    #     drawdown = performance_df["Portfolio Value"] / rolling_max - 1
+    #     max_drawdown = drawdown.min()
+    #     print(f"Maximum Drawdown: {max_drawdown * 100:.2f}%")
+
+    #     return performance_df
+
+    def analyze_performance(self):
+        performance_df = pd.DataFrame(self.portfolio_values).set_index("Date")
+        
+        # Calculate total return
+        self.total_return = (self.portfolio["portfolio_value"] - self.initial_capital) / self.initial_capital
+        
+        # Compute daily returns
+        performance_df["Daily Return"] = performance_df["Portfolio Value"].pct_change()
+        
+        # Calculate Sharpe Ratio
+        mean_daily_return = performance_df["Daily Return"].mean()
+        std_daily_return = performance_df["Daily Return"].std()
+        self.sharpe_ratio = (mean_daily_return / std_daily_return) * (252**0.5) if std_daily_return != 0 else 0
+        
+        # Calculate Maximum Drawdown
+        rolling_max = performance_df["Portfolio Value"].cummax()
+        drawdown = performance_df["Portfolio Value"] / rolling_max - 1
+        self.max_drawdown = drawdown.min()
+        
+        return performance_df
+
+
+### 4. Run the Backtest #####
+if __name__ == "__main__":
+    import argparse
+
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description="Run backtesting simulation")
+    parser.add_argument("--ticker", type=str, help="Stock ticker symbol (e.g., AAPL)")
+    parser.add_argument(
+        "--end-date",
+        type=str,
+        default=datetime.now().strftime("%Y-%m-%d"),
+        help="End date in YYYY-MM-DD format",
+    )
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default=(datetime.now() - relativedelta(months=3)).strftime("%Y-%m-%d"),
+        help="Start date in YYYY-MM-DD format",
+    )
+    parser.add_argument(
+        "--initial-capital",
+        type=float,
+        default=100000,
+        help="Initial capital amount (default: 100000)",
+    )
+
+    args = parser.parse_args()
+
+    selected_analysts = None
+    choices = questionary.checkbox(
+        "Use the Space bar to select/unselect analysts.",
+        choices=[
+            questionary.Choice(display, value=value) for display, value in ANALYST_ORDER
+        ],
+        instruction="\n\nPress 'a' to toggle all.\n\nPress Enter when done to run the hedge fund.",
+        validate=lambda x: len(x) > 0 or "You must select at least one analyst.",
+        style=questionary.Style([
+            ('checkbox-selected', 'fg:green'),
+            ('selected', 'fg:green noinherit'),
+            ('highlighted', 'noinherit'),
+            ('pointer', 'noinherit'),
+        ])
+    ).ask()
+
+    if not choices:
+        print("You must select at least one analyst. Using all analysts by default.")
+        selected_analysts = None
+    else:
+        selected_analysts = choices
+        print(f"\nSelected analysts: {', '.join(Fore.GREEN + choice.title().replace('_', ' ') + Style.RESET_ALL for choice in choices)}")
+
+    # Create an instance of Backtester
+    backtester = Backtester(
+        agent=run_hedge_fund,
+        ticker=args.ticker,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        initial_capital=args.initial_capital,
+        selected_analysts=selected_analysts,
+    )
+
+    # Run the backtesting process
+    backtester.run_backtest()
+    performance_df = backtester.analyze_performance()
