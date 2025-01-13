@@ -1,6 +1,6 @@
 # AI Hedge Fund
 
-This is a proof concept for an AI-powered hedge fund.  The goal of this project is to explore the use of AI to make trading decisions.  This project is for **educational** purposes only and is not intended for real trading or investment.
+This is a proof concept for an AI-powered hedge fund. The goal of this project is to explore the use of AI to make trading decisions. This project is for **educational** purposes only and is not intended for real trading or investment.
 
 This system employs several agents working together:
 
@@ -11,7 +11,7 @@ This system employs several agents working together:
 5. Risk Manager - Calculates risk metrics and sets position limits
 6. Portfolio Manager - Makes final trading decisions and generates orders
    
-<img width="1060" alt="Screenshot 2025-01-03 at 5 39 25 PM" src="https://github.com/user-attachments/assets/4611aace-27d0-43b2-9a70-385b40336e3f" />
+<img width="1060" alt="Screenshot 2025-01-03 at 5 39 25 PM" src="https://github.com/user-attachments/assets/4611aace-27d0-43b2-9a70-385b40336e3f" />
 
 Note: the system simulates trading decisions, it does not actually trade.
 
@@ -33,6 +33,7 @@ By using this software, you agree to use it solely for learning purposes.
   - [Running the Hedge Fund](#running-the-hedge-fund)
   - [Running the Backtester](#running-the-backtester)
 - [Project Structure](#project-structure)
+- [User Interface](#user-interface)
 - [Contributing](#contributing)
 - [Feature Requests](#feature-requests)
 - [License](#license)
@@ -78,39 +79,80 @@ For any other ticker, you will need to set the `FINANCIAL_DATASETS_API_KEY` in t
 
 ## Usage
 
-### Running the Hedge Fund
+### Running the Hedge Fund UI
+```bash
+poetry run python src/dashboard/app.py
+```
+
+The UI provides:
+- Live trading and backtesting modes
+- Configurable parameters for all analysis types
+- Real-time progress tracking for backtests
+- System logs showing analysis details and results
+- Interactive parameter adjustment
+- Visual performance metrics
+
+### Running from Command Line
 ```bash
 poetry run python src/main.py --ticker AAPL
 ```
 
 **Example Output:**
-<img width="992" alt="Screenshot 2025-01-06 at 5 50 17 PM" src="https://github.com/user-attachments/assets/e8ca04bf-9989-4a7d-a8b4-34e04666663b" />
+<img width="992" alt="Screenshot 2025-01-06 at 5 50 17 PM" src="https://github.com/user-attachments/assets/e8ca04bf-9989-4a7d-a8b4-34e04666663b" />
 
-You can also specify a `--show-reasoning` flag to print the reasoning of each agent to the console.
-
+You can specify additional parameters:
 ```bash
-poetry run python src/main.py --ticker AAPL --show-reasoning
-```
-You can optionally specify the start and end dates to make decisions for a specific time period.
-
-```bash
-poetry run python src/main.py --ticker AAPL --start-date 2024-01-01 --end-date 2024-03-01 
+poetry run python src/main.py --ticker AAPL --show-reasoning --start-date 2024-01-01 --end-date 2024-03-01
 ```
 
 ### Running the Backtester
-
 ```bash
 poetry run python src/backtester.py --ticker AAPL
 ```
 
 **Example Output:**
-<img width="941" alt="Screenshot 2025-01-06 at 5 47 52 PM" src="https://github.com/user-attachments/assets/00e794ea-8628-44e6-9a84-8f8a31ad3b47" />
+<img width="941" alt="Screenshot 2025-01-06 at 5 47 52 PM" src="https://github.com/user-attachments/assets/00e794ea-8628-44e6-9a84-8f8a31ad3b47" />
 
-You can optionally specify the start and end dates to backtest over a specific time period.
-
+You can specify the time period:
 ```bash
 poetry run python src/backtester.py --ticker AAPL --start-date 2024-01-01 --end-date 2024-03-01
 ```
+
+## User Interface
+
+The UI provides several tabs for configuration and monitoring:
+
+1. **Trading Setup**
+   - Mode selection (Live/Backtest)
+   - Ticker selection
+   - Date range
+   - Initial capital
+
+2. **Risk Parameters**
+   - Position sizing
+   - Stop loss
+   - Maximum drawdown
+
+3. **Technical Indicators**
+   - Moving averages
+   - RSI parameters
+   - Volatility thresholds
+
+4. **Fundamental & Valuation**
+   - ROE thresholds
+   - Profit margins
+   - Growth rates
+   - Safety margins
+
+5. **Analysts**
+   - Select active analysts
+   - Customize analysis team
+
+6. **System Logs**
+   - Real-time progress updates
+   - Analysis results
+   - Trading decisions
+   - Performance metrics
 
 ## Project Structure 
 ```
@@ -123,10 +165,13 @@ ai-hedge-fund/
 │   │   ├── sentiment.py          # Sentiment analysis agent
 │   │   ├── technicals.py         # Technical analysis agent
 │   │   ├── valuation.py          # Valuation analysis agent
+│   ├── dashboard/                # UI components
+│   │   ├── app.py               # Main UI application
+│   │   ├── config.py            # Configuration management
 │   ├── tools/                    # Agent tools
-│   │   ├── api.py                # API tools
-│   ├── backtester.py             # Backtesting tools
-│   ├── main.py # Main entry point
+│   │   ├── api.py               # API tools
+│   ├── backtester.py            # Backtesting tools
+│   ├── main.py                  # Main entry point
 ├── pyproject.toml
 ├── ...
 ```
@@ -139,7 +184,7 @@ ai-hedge-fund/
 4. Push to the branch
 5. Create a Pull Request
 
-**Important**: Please keep your pull requests small and focused.  This will make it easier to review and merge.
+**Important**: Please keep your pull requests small and focused. This will make it easier to review and merge.
 
 ## Feature Requests
 
